@@ -29,11 +29,13 @@ The application is built on a modern **3-Tier Web Architecture**:
 
 At the module level, the code utilizes several strict software engineering patterns:
 
-### A. The Controller/Service Pattern
-Instead of stuffing database queries directly into API endpoints, the code is logically split:
-* **`routes.js` (Controller):** Only responsible for HTTP requests, parsing parameters, and returning JSON.
-* **`bookingService.js` (Service):** Pure business logic. It handles the actual locking algorithms and database transactions.
-* **Why?** It ensures the **Single Responsibility Principle (SRP)**. If you choose to migrate from Express to GraphQL tomorrow, your `bookingService.js` codebase remains 100% untouched.
+### A. Strict LLD Architectural Layers (Controller/Service/Repository/Strategy)
+Instead of stuffing database queries directly into API endpoints, the code is strictly separated:
+* **`AppController.js` (Controller):** Only responsible for parsing HTTP requests, parameter validation, and mapping JSON responses.
+* **`BookingService.js` (Service):** The pure orchestrator of business logic. It handles the core booking mechanics using injected strategies.
+* **`Repositories.js` (Repository Pattern):** Abstracted Data Access Layer containing isolated classes like `SeatRepository` and `BookingRepository`. This protects SQL queries from leaching into business logic.
+* **`BookingStrategies.js` (Strategy Pattern):** Defines interchangeable classes for locking (Naive, DB Lock, Redis Lock) injected on-the-fly depending on user interaction.
+* **Why Layering?** This satisfies SOLID and **Single Responsibility (SRP)**. If you choose to migrate from Express to GraphQL or from PostgreSQL to MongoDB tomorrow, your main `bookingService.js` and Strategy mechanisms remain 100% untouched.
 
 ### B. Pessimistic Locking Pattern
 * Found in `bookDBLock()`.
