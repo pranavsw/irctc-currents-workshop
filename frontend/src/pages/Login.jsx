@@ -10,7 +10,7 @@ export default function Login({ onLogin }) {
         if (!username.trim()) return;
 
         try {
-            const API_BASE = `http://${window.location.hostname}:3000/api`;
+            const API_BASE = '/api';
             const res = await axios.post(`${API_BASE}/login`, { username });
             onLogin(res.data);
         } catch (err) {

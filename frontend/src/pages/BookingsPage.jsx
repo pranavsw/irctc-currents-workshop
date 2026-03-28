@@ -7,7 +7,7 @@ export default function BookingsPage() {
     const [trains, setTrains] = useState([]);
     const [selectedTrainId, setSelectedTrainId] = useState('');
 
-    const API_BASE = `http://${window.location.hostname}:3000/api`;
+    const API_BASE = '/api';
 
     useEffect(() => {
         axios.get(`${API_BASE}/trains`).then(res => {

@@ -7,7 +7,7 @@ import Login from './pages/Login';
 import BookingsPage from './pages/BookingsPage';
 import './index.css';
 
-const API_BASE = `http://${window.location.hostname}:3000/api`;
+const API_BASE = '/api';
 
 function App() {
   const [user, setUser] = useState(null);
