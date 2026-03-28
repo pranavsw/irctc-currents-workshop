@@ -10,7 +10,7 @@ export default function Login({ onLogin }) {
         if (!username.trim()) return;
 
         try {
-            const API_BASE = '/api';
+            const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:43000/api';
             const res = await axios.post(`${API_BASE}/login`, { username });
             onLogin(res.data);
         } catch (err) {

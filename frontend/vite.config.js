@@ -7,12 +7,6 @@ export default defineConfig({
   server: {
     host: true,
     allowedHosts: true,
-    cors: { origin: '*' },
-    proxy: {
-      '/api': {
-        target: 'http://127.0.0.1:3000',
-        changeOrigin: true
-      }
-    }
+    cors: { origin: '*' }
   }
 })

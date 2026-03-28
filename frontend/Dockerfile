@@ -1,25 +1,24 @@
 # Build stage
-FROM node:22-alpine as build-stage
+FROM node:22-alpine
 
 WORKDIR /app
 
 COPY package*.json ./
-
 RUN npm ci
 
 COPY . .
 
+# Set API URL at build time so React app knows where to reach backend directly
+ARG VITE_API_BASE_URL
+ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
+
+# Build for production
 RUN npm run build
 
-# Serve stage
-FROM nginx:alpine
-
-# Copy custom nginx config
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-
-# Copy build artifacts
-COPY --from=build-stage /app/dist /usr/share/nginx/html
+# Install serve globally
+RUN npm install -g serve
 
 EXPOSE 80
 
-CMD ["nginx", "-g", "daemon off;"]
+# Serve static files on port 80
+CMD ["serve", "-s", "dist", "-l", "80"]
