@@ -1,6 +1,11 @@
+require('dotenv').config();
 const { Client } = require('pg');
+
+const dbUrl = new URL(process.env.DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/irctc');
+dbUrl.pathname = '/postgres'; // Connect to default DB to create the specific one
+
 const client = new Client({
-    connectionString: 'postgres://postgres:postgres@localhost:5432/postgres'
+    connectionString: dbUrl.toString()
 });
 
 async function createDb() {

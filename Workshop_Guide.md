@@ -66,19 +66,34 @@ REDIS_URL=redis://localhost:6379
 Run Docker containers (provide them this `docker-compose.yml` in the root):
 ```yaml
 version: '3.8'
+
 services:
-  db:
-    image: postgres:15
+  postgres:
+    image: postgres:15-alpine
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: irctc
     ports:
       - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d irctc"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   redis:
-    image: redis:7
+    image: redis:7-alpine
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  postgres_data:
+  redis_data:
 ```
 
 ---
@@ -86,19 +101,27 @@ services:
 ### Step 2: The Database Connections
 Create file: `backend/db.js`
 ```javascript
-const { Pool } = require('pg');
 require('dotenv').config();
+const { Pool } = require('pg');
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL
+});
+
 module.exports = pool;
 ```
 
 Create file: `backend/redis.js`
 ```javascript
-const Redis = require('ioredis');
 require('dotenv').config();
+const Redis = require('ioredis');
 
-const redisClient = new Redis(process.env.REDIS_URL);
+const redisClient = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+
+redisClient.on('error', (err) => {
+    console.error('Redis error:', err);
+});
+
 module.exports = redisClient;
 ```
 
@@ -109,41 +132,65 @@ Create file: `backend/bookingService.js`
 ```javascript
 const pool = require('./db');
 const redisClient = require('./redis');
-const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+// Sleep to simulate latency, making race conditions obvious
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function bookNaive(userId, trainId, seatId) {
+    // 1. Check if seat is available
     const seatRes = await pool.query('SELECT status FROM seats WHERE id = $1', [seatId]);
+    if (seatRes.rows.length === 0) throw new Error('Seat not found');
     if (seatRes.rows[0].status !== 'available') throw new Error('Seat already booked');
 
+    // SIMULATE LATENCY TO FORCE RACE CONDITION
     await delay(200);
 
+    // 2. Book seat
     await pool.query('UPDATE seats SET status = $1 WHERE id = $2', ['booked', seatId]);
+
+    // 3. Create booking record
     const bookingRes = await pool.query(
         'INSERT INTO bookings (user_id, train_id, seat_id) VALUES ($1, $2, $3) RETURNING id',
         [userId, trainId, seatId]
     );
-    return { success: true, bookingId: bookingRes.rows[0].id };
+
+    return { success: true, mode: 'naive', bookingId: bookingRes.rows[0].id };
 }
 
 async function bookDBLock(userId, trainId, seatId) {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        const seatRes = await client.query('SELECT status FROM seats WHERE id = $1 FOR UPDATE', [seatId]);
-        if (seatRes.rows[0].status !== 'available') throw new Error('Seat already booked');
 
+        // 1. Select for update - locks the row so other transactions wait here
+        const seatRes = await client.query('SELECT status FROM seats WHERE id = $1 FOR UPDATE', [seatId]);
+        if (seatRes.rows.length === 0) {
+            await client.query('ROLLBACK');
+            throw new Error('Seat not found');
+        }
+
+        if (seatRes.rows[0].status !== 'available') {
+            await client.query('ROLLBACK');
+            throw new Error('Seat already booked');
+        }
+
+        // SIMULATE LATENCY
         await delay(200);
 
+        // 2. Book seat
         await client.query('UPDATE seats SET status = $1 WHERE id = $2', ['booked', seatId]);
+
+        // 3. Create booking record
         const bookingRes = await client.query(
             'INSERT INTO bookings (user_id, train_id, seat_id) VALUES ($1, $2, $3) RETURNING id',
             [userId, trainId, seatId]
         );
+
         await client.query('COMMIT');
-        return { success: true, bookingId: bookingRes.rows[0].id };
-    } catch (err) {
+        return { success: true, mode: 'db-lock', bookingId: bookingRes.rows[0].id };
+    } catch (e) {
         await client.query('ROLLBACK');
-        throw err;
+        throw e;
     } finally {
         client.release();
     }
@@ -152,30 +199,50 @@ async function bookDBLock(userId, trainId, seatId) {
 async function bookRedisLock(userId, trainId, seatId) {
     const lockKey = `lock:seat:${seatId}`;
     const lockValue = Math.random().toString(36);
-    
-    // REDIS BOUNCER 
+    // Acquire lock for 5 seconds
     const acquired = await redisClient.set(lockKey, lockValue, 'NX', 'PX', 5000);
-    if (!acquired) throw new Error('Seat is currently being booked by someone else');
+
+    if (!acquired) {
+        throw new Error('Seat is currently being booked by someone else');
+    }
 
     try {
+        // 1. Check if seat is available
         const seatRes = await pool.query('SELECT status FROM seats WHERE id = $1', [seatId]);
+        if (seatRes.rows.length === 0) throw new Error('Seat not found');
         if (seatRes.rows[0].status !== 'available') throw new Error('Seat already booked');
 
+        // SIMULATE LATENCY
         await delay(200);
 
+        // 2. Book seat
         await pool.query('UPDATE seats SET status = $1 WHERE id = $2', ['booked', seatId]);
+
+        // 3. Create booking record
         const bookingRes = await pool.query(
             'INSERT INTO bookings (user_id, train_id, seat_id) VALUES ($1, $2, $3) RETURNING id',
             [userId, trainId, seatId]
         );
-        return { success: true, bookingId: bookingRes.rows[0].id };
+
+        return { success: true, mode: 'redis-lock', bookingId: bookingRes.rows[0].id };
     } finally {
-        const currentLock = await redisClient.get(lockKey);
-        if (currentLock === lockValue) await redisClient.del(lockKey);
+        // Release the lock safely using a Lua script
+        const script = `
+      if redis.call("get", KEYS[1]) == ARGV[1] then
+        return redis.call("del", KEYS[1])
+      else
+        return 0
+      end
+    `;
+        await redisClient.eval(script, 1, lockKey, lockValue);
     }
 }
 
-module.exports = { bookNaive, bookDBLock, bookRedisLock };
+module.exports = {
+    bookNaive,
+    bookDBLock,
+    bookRedisLock
+};
 ```
 
 ---
@@ -194,9 +261,14 @@ const routes = require('./routes');
 const app = express();
 app.use(cors({ origin: '*' }));
 app.use(express.json());
+
+// Mount the centralized routes
 app.use('/api', routes);
 
-app.listen(3000, '0.0.0.0', () => console.log('IRCTC Dismantled Running!'));
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running on port ${PORT} !`);
+});
 ```
 
 ---
