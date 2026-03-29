@@ -58,9 +58,31 @@ function BookingSystem({ user }) {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState(null);
 
+  const fetchStrategy = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/strategy`);
+      setBookingMode(res.data.strategy);
+    } catch (err) { }
+  };
+
   useEffect(() => {
     fetchTrains();
+    fetchStrategy();
+    const interval = setInterval(fetchStrategy, 5000); // Polling for strategy updates
+    return () => clearInterval(interval);
   }, []);
+
+  const handleStrategyChange = async (e) => {
+    const newStrategy = e.target.value;
+    try {
+      await axios.post(`${API_BASE}/strategy`, { strategy: newStrategy, username: user.name });
+      setBookingMode(newStrategy);
+      showMessage('success', `Strategy changed to ${newStrategy}`);
+    } catch (err) {
+      showMessage('error', err.response?.data?.error || 'Failed to change strategy');
+      fetchStrategy(); // revert
+    }
+  };
 
   useEffect(() => {
     if (selectedTrain) {
@@ -99,7 +121,7 @@ function BookingSystem({ user }) {
     setMessage(null);
 
     try {
-      const res = await axios.post(`${API_BASE}/book/${bookingMode}`, {
+      const res = await axios.post(`${API_BASE}/book`, {
         userId: user.id,
         trainId: selectedTrain.id,
         seatId: selectedSeat.id
@@ -156,11 +178,19 @@ function BookingSystem({ user }) {
           <div className="controls">
             <div className="mode-selector">
               <label htmlFor="mode"><strong>Booking Mode (Concurrency Strategy)</strong></label>
-              <select id="mode" value={bookingMode} onChange={(e) => setBookingMode(e.target.value)}>
-                <option value="naive">Naive Mode (No Lock - Race Conditions)</option>
-                <option value="db-lock">Database Lock (Pessimistic Row Lock)</option>
-                <option value="redis-lock">Redis Distributed Lock</option>
-              </select>
+              {user.name === 'Admin' ? (
+                <select id="mode" value={bookingMode} onChange={handleStrategyChange}>
+                  <option value="naive">Naive Mode (No Lock - Race Conditions)</option>
+                  <option value="db-lock">Database Lock (Pessimistic Row Lock)</option>
+                  <option value="redis-lock">Redis Distributed Lock</option>
+                </select>
+              ) : (
+                <div style={{ padding: '0.5rem', background: '#e2e8f0', borderRadius: '4px', marginTop: '0.5rem' }}>
+                  {bookingMode === 'naive' ? 'Naive Mode (No Lock - Race Conditions)' : 
+                   bookingMode === 'db-lock' ? 'Database Lock (Pessimistic Row Lock)' : 
+                   'Redis Distributed Lock'}
+                </div>
+              )}
             </div>
 
             <button onClick={handleBook} disabled={!selectedSeat || loading}>

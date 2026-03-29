@@ -3,6 +3,8 @@ const router = express.Router();
 const bookingService = require('./bookingService');
 const pool = require('./db');
 
+let currentStrategy = 'naive';
+
 // List trains
 router.get('/trains', async (req, res) => {
     try {
@@ -48,6 +50,43 @@ router.get('/trains/:id/bookings', async (req, res) => {
         res.json(result.rows);
     } catch (err) {
         res.status(500).json({ error: err.message });
+    }
+});
+
+// Get current strategy
+router.get('/strategy', (req, res) => {
+    res.json({ strategy: currentStrategy });
+});
+
+// Set strategy
+router.post('/strategy', (req, res) => {
+    const { strategy, username } = req.body;
+    if (username !== 'Admin') {
+        return res.status(403).json({ error: 'Only Admin can change the booking strategy' });
+    }
+    if (['naive', 'db-lock', 'redis-lock'].includes(strategy)) {
+        currentStrategy = strategy;
+        res.json({ success: true, strategy: currentStrategy });
+    } else {
+        res.status(400).json({ error: 'Invalid strategy' });
+    }
+});
+
+// Generic book endpoint using global strategy
+router.post('/book', async (req, res) => {
+    const { userId, trainId, seatId } = req.body;
+    try {
+        let result;
+        if (currentStrategy === 'naive') {
+            result = await bookingService.bookNaive(userId, trainId, seatId);
+        } else if (currentStrategy === 'db-lock') {
+            result = await bookingService.bookDBLock(userId, trainId, seatId);
+        } else if (currentStrategy === 'redis-lock') {
+            result = await bookingService.bookRedisLock(userId, trainId, seatId);
+        }
+        res.json(result);
+    } catch (err) {
+        res.status(400).json({ error: err.message });
     }
 });
 
